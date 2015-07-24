@@ -1,4 +1,4 @@
-## This project has been migrated from Google Code where it was orphaned and needs some TLC. Pull requests are welcomed. ##
+*This project has been migrated from [Google Code](https://code.google.com/p/liten2/) where it was orphaned. It needs some TLC - pull requests are welcomed.*
 
 ## Overview ##
 We accomplish incredible speeds by **not** including logic in our indexing engine. The first part of the program performs a scan in a selected path and stores the meta-data in a database.

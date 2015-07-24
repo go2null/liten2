@@ -4,8 +4,8 @@
 #License: GPLv3 License
 #Email: alfredodeza [at] gmail dot com
 
-__version__ = "0.0.2"
-__date__ = "2009-04-20"
+__version__ = "0.0.3"
+__date__ = "2009-08-06"
 
 """
 Liten2 walks through a given path and creates a Checksum based on
@@ -41,8 +41,8 @@ class Walk(object):
                     if os.path.isfile(absolute):
                         size = os.path.getsize(absolute)
                         if size > self.size:
-                            readfile = open(absolute).read(8192)
-                            sh = hashlib.sha1(readfile).hexdigest()
+                            readfile = open(absolute).read(163840)
+                            sh = hashlib.sha224(readfile).hexdigest()
                             db.insert(absolute, size, sh)
             
                 except IOError:
@@ -59,7 +59,6 @@ class Report(object):
                  full=True):
         self.dump = dump
         self.full = full
-        self.dump = strftime('%Y-%m-%d.sql')
         if os.path.isfile(self.dump):
             self.sqlfile = open(self.dump, 'r')
             self.conn = sqlite3.connect(':memory:', isolation_level='exclusive')
@@ -75,8 +74,9 @@ class Report(object):
     
     def fullreport(self):
         """Returns all reports available"""
-        print ""
-        print "Duplicate files list"
+        for dup_count in self.count_dups():
+            print ""
+            print "Duplicate files list"
         print "--------------------------------------"
         for paths in self.path_dups():
             print paths[0]
@@ -193,20 +193,145 @@ class DbWork(object):
             f.write(line)
         self.c.close()
 
+class Interactive_new(object):
+    """This mode creates a session to delete files"""
+    
+    def __init__(self,
+                 dryrun=False):
+        self.dryrun = dryrun
+        self.dump = strftime('%Y-%m-%d.sql')
+        if os.path.isfile(self.dump):
+            self.sqlfile = open(self.dump, 'r')
+            self.conn = sqlite3.connect(':memory:', isolation_level='exclusive')
+            self.c = self.conn.cursor()
+            for i in self.sqlfile.readlines():
+                self.c.executescript(i)
+            # we create a new table for the interactive session:
+            self.c.execute('''create table interactive(path TEXT, checksum TEXT)''')
+            print "Liten2 has loaded the database into memory."
+        else:
+            print "SQL file not found for interactive mode. Run liten2.py to build a new one."
+            sys.exit(1)
+            
+    def single_checksum(self):
+        """Returns a single checksum from the stack of duplicates"""
+        command = "select checksum from interactive order by checksum limit 1;"
+        return self.c.execute(command)
+    
+    def duplicate_group(self, checksum):
+        """Groups equal checksums to create a selection"""
+        command = "select path from interactive where checksum='%s'" % checksum
+        return self.c.execute(command)
+        
+    def delete_group(self, checksum):
+        """Deletes a group of checksums from the database"""
+        command = "delete from interactive where checksum='%'"
+        return self.c.execute(command)
+        
+    def session(self):
+        "starts a new session"
+        print "Building interactive session. This might take a while...."
+        dups = Report(full=False)
+        for row in dups.path_dups():
+            path = row[0]
+            checksum = row[1]
+            command = "INSERT INTO interactive (path, checksum)\
+                      VALUES('%s', '%s')" % (path, checksum)
+            self.c.execute(command)
+        for checksum in self.single_checksum():
+            single = checksum[0]
+        for_deletion = []
+
+        if self.dryrun:
+            print "\n#####################################################"
+            print "# Running in DRY RUN mode. No files will be deleted #"
+            print "#####################################################\n"
+        print """
+\t LITEN 2 \n
+
+Starting a new Interactive Session.
+
+* Duplicate files will be presented in numbered groups.
+* Type one number at a time
+* Hit Enter to skip to the next group.
+* Ctrl-C cancels the operation, nothing will be deleted.
+* Confirm your selections at the end.\n
+-------------------------------------------------------\n"""
+
+        try:
+            for checksum in single:
+                count = 1
+                match = {}
+                for i in self.duplicate_group(single):
+                    match[count] = i[0]
+                    print "%d \t %s" % (count, i[0])
+                    count += 1
+                self.delete_group(single)
+                try:
+                    answer = True
+                    while answer:
+                        choose = int(raw_input("Choose a number to delete (Enter to skip): "))
+                        if match.get(choose) not in for_deletion:
+                            for_deletion.append(match.get(choose))
+                        if not choose:
+                            answer = False
+                           
+                except ValueError:
+                    print "--------------------------------------------------\n"
+            
+            print "Files selected for complete removal:\n"
+            for selection in for_deletion:
+                if selection:
+                    print selection
+            print ""
+            if self.dryrun:
+                print "###########################"
+                print "# DRY RUN mode ends here. #"
+                print "###########################\n"
+            if not self.dryrun:
+                confirm = raw_input("Type Yes to confirm (No to cancel): ")
+                if confirm in ["Yes", "yes", "Y", "y"]:
+                    for selection in for_deletion:
+                        if selection:
+                            
+                            try:
+                                print "Removing file:\t %s" % selection
+                                os.remove(selection)
+                            except OSError:
+                                "Could not delete:\t %s \nCheck Permissions" % selection
+            else:
+                print "Cancelling operation, no files were deleted."
+                    
+        except KeyboardInterrupt:
+            print "\nExiting nicely from interactive mode. No files deleted\n"
+                
+
+
 class Interactive(object):
     """This mode creates a session to delete files"""
     
     def __init__(self,
                  dryrun=False):
         self.dryrun = dryrun
+        self.dump = strftime('%Y-%m-%d.sql')
+        if os.path.isfile(self.dump):
+            self.sqlfile = open(self.dump, 'r')
+            self.conn = sqlite3.connect(':memory:', isolation_level='exclusive')
+            self.c = self.conn.cursor()
+            for i in self.sqlfile.readlines():
+                self.c.executescript(i)
+        else:
+            print "SQL file not found for interactive mode. Run liten2.py to build a new one."
+            sys.exit(1)
             
     def session(self):
         "starts a new session"
-        single = set()
+        single = []
         for_deletion = []
         dups = Report(full=False)
         for duplicates in dups.path_dups():
-           single.add(duplicates[1]) 
+            if duplicates[1] not in single:
+                single.append(duplicates[1])
 
         if self.dryrun:
             print "\n#####################################################"
@@ -293,8 +418,35 @@ def main():
     p.add_option('--dryrun', '-d', action="store_true",
                  help="Does not delete anything. Use ONLY with interactive mode")
     p.add_option('--open', '-o', help="Choose a SQL dump from another run")
+    p.add_option('--test', action="store_true")
     
     options, arguments = p.parse_args()
+    
+    if options.test:
+        run = Interactive_new()
+        run.session()
+       # dump = strftime('%Y-%m-%d.sql')
+      #  if os.path.isfile(dump):
+      #      sqlfile = open(dump, 'r')
+      #      conn = sqlite3.connect(':memory:', isolation_level='exclusive')
+      #      c = conn.cursor()
+      #      for i in sqlfile.readlines():
+      #          c.executescript(i)
+      #      c.execute('''create table interactive(path TEXT, checksum TEXT)''')
+      #  dups = Report(full=False)
+      #  for i in dups.path_dups():
+      #      path = i[0]
+      #      checksum = i[1]
+            #if i[1] == checksum:
+            #    print i
+            #values = (path. checksum)
+       #     command = "INSERT INTO interactive (path, checksum) VALUES('%s', '%s')" % (path, checksum)
+          #  print command
+        #    c.execute(command)
+        #    conn.commit()
+        
+                
+                
         
     if options.report:
         if options.open:
@@ -317,7 +469,7 @@ def main():
         try:
             run = Walk(options.path)
             if options.size:
-                mb = int(float(options.size))*1048576
+                mb = int(options.size)*1048576
                 run = Walk(options.path, size=mb)
             run.findthis()
             out = Report()
